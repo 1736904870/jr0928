@@ -20056,7 +20056,7 @@ function endRecord(send) {
           var blob = new Blob(M.chunks, { type: 'audio/webm' });
           if (blob.size) M.recUrl = URL.createObjectURL(blob);
         } catch (e) {}
-        if (send) pushLine({ from: 'me', kind: 'voice', dur: sec, src: M.recUrl });
+        if (send) { pushLine({ from: 'me', kind: 'voice', dur: sec, src: M.recUrl }); nudgeReply(); }
         M.recorder = null;
       };
       M.recorder.stop();
@@ -20065,7 +20065,7 @@ function endRecord(send) {
   stopRecStream();
   if (!hasRecorder) {
     M.recorder = null;
-    if (send) pushLine({ from: 'me', kind: 'voice', dur: sec, src: M.recUrl });
+    if (send) { pushLine({ from: 'me', kind: 'voice', dur: sec, src: M.recUrl }); nudgeReply(); }
   }
   render();
 }
@@ -20130,27 +20130,61 @@ function renderStream() {
   box.scrollTop = box.scrollHeight;
 }
 
-/* ---------------- 对方说话 ---------------- */
+/* ---------------- 对方说话 ----------------
+   回复节奏完全跟「发送设置」里的「回复最短等待时间 / 回复最长等待时间」走，
+   和正常聊天里对方回消息的间隔是同一套设置。 */
+function replyRange() {
+  var a = A();
+  var s = null;
+  try { s = (a && a.appData && a.appData.sendSettings) || null; } catch (e) {}
+  if (!s) {
+    try { s = (a && a.dataManager && typeof a.dataManager.getSendSettings === 'function') ? a.dataManager.getSendSettings() : null; } catch (e) {}
+  }
+  s = s || {};
+  var min = Number(s.minReplyDelay);
+  var max = Number(s.maxReplyDelay);
+  if (!isFinite(min) || min <= 0) min = 1.5;
+  if (!isFinite(max) || max <= 0) max = 3.5;
+  if (max < min) max = min;
+  return { min: min * 1000, max: max * 1000 };
+}
+function replyDelay() {
+  var r = replyRange();
+  return Math.round(r.min + Math.random() * (r.max - r.min));
+}
+/* 我刚说了话（录音 / 打字）→ 按设置的区间重新排一次对方的回复 */
+function nudgeReply() {
+  if (!S.open || S.state !== 'active') return;
+  scheduleAi(replyDelay());
+}
+var lineTimers = [];        // 一轮回复里"连发的那几句"的定时器，节奏一改就一起作废
+function clearLineTimers() {
+  for (var i = 0; i < lineTimers.length; i++) { clearTimeout(lineTimers[i]); }
+  lineTimers = [];
+}
 function aiRound(count) {
   if (!S.open || S.state !== 'active') return;
   var n = count || (Math.random() < 0.45 ? 2 : 1);
   var lines = pickLines(n);
-  var acc = 500 + Math.random() * 1100;
+  var acc = 200 + Math.random() * 400;
   lines.forEach(function (txt) {
     var d = acc; acc += 700 + Math.random() * 1500;
-    setTimeout(function () {
+    var id = setTimeout(function () {
       if (!S.open || S.state !== 'active') return;
       pushLine({ from: 'them', kind: 'text', body: txt });
     }, d);
+    lineTimers.push(id);
   });
 }
-function scheduleAi(delay) {
+function scheduleAi(delay, keepLines) {
   if (T.ai) { clearTimeout(T.ai); T.ai = null; }
-  var wait = delay == null ? (3500 + Math.random() * 4500) : delay;
+  /* keepLines=true 表示只是"这一轮说完接着排下一轮"，不能把刚排好的台词清掉 */
+  if (!keepLines) clearLineTimers();
+  var wait = delay == null ? replyDelay() : delay;
   T.ai = setTimeout(function () {
     if (!S.open || S.state !== 'active') return;
     aiRound();
-    scheduleAi();
+    scheduleAi(null, true);
   }, wait);
 }
 
@@ -20455,8 +20489,10 @@ function moveDrag(ev) {
     S.pipX = Math.round(nx); S.pipY = Math.round(ny);
     drag.el.style.transform = 'translate(' + S.pipX + 'px,' + S.pipY + 'px)';
   } else {
-    var lx = Math.max(4, Math.min(wr.width - drag.w - 4, drag.ox + dx));
-    var ly = Math.max(4, Math.min(wr.height - drag.h - 4, drag.oy + dy));
+    /* 小窗可以在整个窗口里随便拖（不受聊天区那条竖带限制），四边都不给出界 */
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var lx = Math.max(-wr.left + 4, Math.min(vw - wr.left - drag.w - 4, drag.ox + dx));
+    var ly = Math.max(4, Math.min(vh - wr.top - drag.h - 4, drag.oy + dy));
     S.miniX = Math.round(lx); S.miniY = Math.round(ly);
     drag.el.style.left = S.miniX + 'px'; drag.el.style.top = S.miniY + 'px';
   }
@@ -20498,6 +20534,7 @@ function clearTimers() {
   ['answer', 'wait', 'auto', 'clock', 'ai', 'rec', 'close'].forEach(function (k) {
     if (T[k]) { clearTimeout(T[k]); clearInterval(T[k]); T[k] = null; }
   });
+  try { clearLineTimers(); } catch (e) {}
 }
 function openUI() {
   ensureDom();
@@ -20652,12 +20689,7 @@ function sendText() {
   if (!txt) return;
   pushLine({ from: 'me', kind: 'text', body: txt });
   inp.value = '';
-  if (Math.random() < 0.75) {
-    setTimeout(function () {
-      if (!S.open || S.state !== 'active') return;
-      pushLine({ from: 'them', kind: 'text', body: pickLines(1)[0] });
-    }, 900 + Math.random() * 1800);
-  }
+  if (Math.random() < 0.75) nudgeReply();
 }
 function switchKind() {
   if (S.state !== 'active') return;
