@@ -3,6 +3,18 @@
 <html lang="zh-CN"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>/* 预览面板/沙盒里 localStorage 可能被禁用；禁用时自动改用内存存储，
+   否则应用初始化会直接报错，看起来就是「所有按钮点了都没反应」 */
+(function(){try{window.localStorage.setItem('__wb_t','1');window.localStorage.removeItem('__wb_t');}catch(e){
+  var m={};var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null;},
+  setItem:function(k,v){m[k]=String(v);},removeItem:function(k){delete m[k];},clear:function(){m={};},
+  key:function(i){var ks=Object.keys(m);return ks[i]===undefined?null:ks[i];},
+  get length(){return Object.keys(m).length;}};
+  try{Object.defineProperty(window,'localStorage',{configurable:true,value:s});}
+  catch(e2){try{window.localStorage=s;}catch(e3){}}
+}})();
+</script>
+
 <title>梦角爱人</title>
 <style>
 /* 主题色变量 - 完全保留第二个文件的所有CSS */
@@ -6660,6 +6672,21 @@ input:checked + .slider:before {
               <input type="range" min="0" max="100" value="30" class="active-call-slider" id="rejectProbSlider">
             </div>
           </div>
+          <!-- 来电 / 未接设置（移植自参考版通话模块） -->
+          <div class="communication-item" style="border-top:1px solid rgba(0,0,0,0.08); padding-top:15px;">
+            <div class="communication-label">来电与未接设置</div>
+            <div class="ratio-label" style="margin-top:10px;">
+              <span>响铃多少秒算未接</span>
+              <span class="active-call-value" id="ccRingSecValue">30 秒</span>
+            </div>
+            <input type="range" min="5" max="120" step="5" value="30" class="active-call-slider" id="ccRingSecSlider">
+            <div class="ratio-label" style="margin-top:12px;">
+              <span>我打出去最多等多少秒</span>
+              <span class="active-call-value" id="ccWaitSecValue">30 秒</span>
+            </div>
+            <input type="range" min="5" max="120" step="5" value="30" class="active-call-slider" id="ccWaitSecSlider">
+            <p style="font-size:0.75rem;color:#aaa;margin:10px 0 0;line-height:1.6;">打来时是语音还是视频，按上面「呼叫类型偏好」里的视频占比走；等够响铃时间没人接就算未接来电。</p>
+          </div>
           <div class="communication-stats">
             <p style="margin:0 0 8px 0; font-weight:500;">通话统计</p>
             <p>今日语音: <span id="todayCalls">0</span> 次</p>
@@ -12451,6 +12478,10 @@ if (savePhrasesBtn) savePhrasesBtn.addEventListener('click', () => this.saveCurr
 const deduplicatePhrasesBtn = document.getElementById('deduplicatePhrasesBtn');
 if (deduplicatePhrasesBtn) deduplicatePhrasesBtn.addEventListener('click', () => this.deduplicateCurrentPhrases());
 
+// 全部分组查重去重（补绑点击）
+const deduplicateAllPhrasesBtn = document.getElementById('deduplicateAllPhrasesBtn');
+if (deduplicateAllPhrasesBtn) deduplicateAllPhrasesBtn.addEventListener('click', () => this.deduplicateAllPhrases());
+
 // ===== 修复：字卡批量添加 / 导入导出按钮绑定 =====
 // 批量添加字卡（确认添加字卡按钮）
 const batchAddConfirmBtn = document.getElementById('batchAddConfirmBtn');
@@ -15339,6 +15370,42 @@ deduplicateAllPhrases() {
         return;
     }
 
+    const normKey = (p) => String(p == null ? '' : p).trim().toLowerCase();
+
+    // 第一步：只扫描不修改，先算出到底有多少重复
+    const scanSeen = new Set();
+    let totalDup = 0;
+    const previewDetail = [];
+    groups.forEach(group => {
+        const list = group.phrases || [];
+        let dupInGroup = 0;
+        list.forEach(phrase => {
+            const key = normKey(phrase);
+            if (!key) return;
+            if (scanSeen.has(key)) dupInGroup++;
+            else scanSeen.add(key);
+        });
+        if (dupInGroup > 0) {
+            previewDetail.push(`「${group.name}」${dupInGroup} 条`);
+            totalDup += dupInGroup;
+        }
+    });
+
+    if (totalDup === 0) {
+        this.showNotification('全部分组无重复词条 🎉');
+        return;
+    }
+
+    // 删除前确认（跨分组删除不可撤销）
+    const ok = window.confirm(
+        `将在全部分组中删除 ${totalDup} 条重复字卡：\n${previewDetail.join('，')}\n\n规则：同一条字卡只保留第一次出现的位置，是否继续？`
+    );
+    if (!ok) {
+        this.showNotification('已取消，数据未改动');
+        return;
+    }
+
+    // 第二步：真正执行去重（以第一次出现为准）
     const globalSeen = new Set();
     let totalRemoved = 0;
     const removedDetail = [];
@@ -15348,13 +15415,13 @@ deduplicateAllPhrases() {
         const kept = [];
         let removedInGroup = 0;
         original.forEach(phrase => {
-            const key = phrase.trim().toLowerCase();
+            const key = normKey(phrase);
             if (!key) return;
             if (globalSeen.has(key)) {
                 removedInGroup++;
             } else {
                 globalSeen.add(key);
-                kept.push(phrase.trim());
+                kept.push(String(phrase).trim());
             }
         });
         if (removedInGroup > 0) {
@@ -15367,7 +15434,7 @@ deduplicateAllPhrases() {
     const textarea = document.getElementById('phrasesTextarea');
     const currentGroup = groups.find(g => g.id === this.appData.phraseGroups.currentGroupId);
     if (textarea && currentGroup) {
-        textarea.value = currentGroup.phrases.join('\n');
+        textarea.value = (currentGroup.phrases || []).join('\n');
     }
 
     this.updatePhraseCount();
@@ -15376,11 +15443,7 @@ deduplicateAllPhrases() {
     this.appData.responsePhrases = this.dataManager.getAllEnabledPhrases();
     this.markDirty();
 
-    if (totalRemoved === 0) {
-        this.showNotification('全部分组无重复词条 🎉');
-    } else {
-        this.showNotification(`全局去重完成：共删除 ${totalRemoved} 条重复词条（${removedDetail.join('，')}）`);
-    }
+    this.showNotification(`全局去重完成：共删除 ${totalRemoved} 条重复字卡（${removedDetail.join('，')}）`);
 }
 
 /**
@@ -19503,4 +19566,1290 @@ function renderPollHistory() {
 })();
 </script>
 
+
+<!-- ===== 通话模块（语音 / 视频，移植自参考版）===== -->
+<style id="ccModuleStyles">
+/* ===================== 通话模块（移植自参考版「未加密第5版AN10.23」）===================== */
+#ccScreen{position:fixed;top:0;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;z-index:400;background:#0E0F12;color:#fff;display:flex;flex-direction:column;overflow:hidden;--ccgreen:#D8DCE1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}
+#ccScreen.cc-hide{display:none !important;}
+#ccScreen.cc-video{background:#0E0F12;}
+
+/* 顶栏 */
+#ccScreen .cc-nav{position:relative;z-index:8;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 14px 4px;flex:0 0 auto;}
+#ccScreen .cc-navbtn{width:38px;height:38px;border-radius:12px;border:none;background:rgba(255,255,255,.18);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex:0 0 auto;-webkit-tap-highlight-color:transparent;}
+#ccScreen .cc-navbtn:active{background:rgba(255,255,255,.32);}
+#ccScreen .cc-navsp{width:38px;height:38px;flex:0 0 auto;}
+#ccScreen .cc-navtitle{flex:1;min-width:0;text-align:center;font-size:15.5px;line-height:20px;color:#fff;letter-spacing:.8px;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px rgba(0,0,0,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* 视频通话背景 */
+#ccScreen .cc-bg{position:absolute;inset:0;z-index:0;overflow:hidden;background:#16181D;}
+#ccScreen .cc-bg::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,9,12,.44) 0%,rgba(8,9,12,.24) 42%,rgba(8,9,12,.62) 100%);}
+#ccScreen .cc-bgavatar{width:100%;height:100%;object-fit:cover;filter:blur(1.5px) saturate(1.05) brightness(.72);transform:scale(1.02);}
+#ccScreen .cc-bg.noface{background:radial-gradient(130% 90% at 50% 26%,#454B57 0%,#2A2E36 44%,#12141A 100%);}
+#ccScreen .cc-bg.noface .cc-bgavatar{display:none;}
+#ccScreen .cc-bg.blur .cc-bgavatar{filter:blur(12px) saturate(1.15) brightness(.56);transform:scale(1.12);}
+
+/* 语音通话大头像 */
+#ccScreen .cc-hero{position:relative;z-index:4;flex:0 0 auto;padding:20px 24px 4px;display:flex;flex-direction:column;align-items:center;gap:14px;}
+#ccScreen .cc-heroav{width:126px;height:126px;border-radius:16px;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:48px;color:#5A5A52;background:#E8E8E8;box-shadow:0 12px 32px rgba(0,0,0,.5);}
+#ccScreen .cc-heroav img{width:100%;height:100%;object-fit:cover;}
+#ccScreen .cc-heroname{font-size:22px;font-weight:600;color:#F5F6F8;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* 视频通话中间：对方方形头像 */
+#ccScreen .cc-stage{position:relative;z-index:3;flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;height:clamp(190px,30vh,300px);padding:0 16px;}
+#ccScreen .cc-stageav{width:106px;height:106px;border-radius:16px;overflow:hidden;background:#E8E8E8;display:flex;align-items:center;justify-content:center;font-size:42px;color:#5A5A52;box-shadow:0 14px 34px rgba(0,0,0,.42);}
+#ccScreen .cc-stageav img{width:100%;height:100%;object-fit:cover;}
+#ccScreen .cc-stagename{font-size:20px;font-weight:600;letter-spacing:.5px;color:#F5F7FA;text-shadow:0 2px 10px rgba(0,0,0,.65);max-width:86%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* 自己右上角小窗（视频） */
+#ccScreen .cc-pip{position:absolute;cursor:grab;top:92px;right:14px;width:118px;height:180px;border-radius:12px;overflow:hidden;background:#0A0A0C;border:1px solid rgba(255,255,255,.1);box-shadow:0 8px 26px rgba(0,0,0,.55);z-index:6;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;}
+#ccScreen .cc-pip video{width:100%;height:100%;object-fit:cover;pointer-events:none;}
+#ccScreen .cc-pipav{width:100%;height:100%;background:#E8E8E8;display:flex;align-items:center;justify-content:center;font-size:44px;color:#5A5A52;}
+#ccScreen .cc-pipav img{width:100%;height:100%;object-fit:cover;}
+/* 点小窗 → 自己的画面铺满整屏垫在最底下；小窗还在右上角（显示对方），气泡/底栏/顶栏照旧盖在上面 */
+#ccScreen .cc-fullself{position:absolute;inset:0;z-index:2;overflow:hidden;background:#000;}
+#ccScreen .cc-fullself video{width:100%;height:100%;object-fit:cover;pointer-events:none;}
+#ccScreen .cc-full-av{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:110px;color:#5A5A52;background:#E8E8E8;overflow:hidden;}
+#ccScreen .cc-full-av img{width:100%;height:100%;object-fit:cover;}
+#ccScreen.cc-selfbig .cc-stage{visibility:hidden;}
+/* 自定义通话背景（语音/视频各自一张）：默认清晰，点了「模糊」才糊 */
+#ccScreen .cc-bgimg{position:absolute;inset:0;z-index:1;background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(1.05) brightness(.8);transform:scale(1);}
+#ccScreen .cc-bgimg.blur{filter:blur(22px) saturate(1.2) brightness(.72);transform:scale(1.15);}
+#ccScreen .cc-bgimg::after{content:"";position:absolute;inset:0;background:rgba(0,0,0,.34);}
+#ccScreen .cc-bgimg.blur::after{background:rgba(0,0,0,.28);}
+
+/* 来电 / 拨出中：背景压得更暗，名字和提示字要看得清 */
+#ccScreen.cc-incoming .cc-bg::after,
+#ccScreen.cc-outgoing .cc-bg::after{background:linear-gradient(180deg,rgba(8,9,12,.68) 0%,rgba(8,9,12,.52) 45%,rgba(8,9,12,.82) 100%);}
+#ccScreen.cc-incoming .cc-bgimg::after,
+#ccScreen.cc-outgoing .cc-bgimg::after{background:rgba(0,0,0,.52);}
+
+/* 通话字幕流 */
+#ccScreen .cc-stream{position:relative;z-index:4;flex:1;overflow-y:auto;padding:8px 14px 12px;display:flex;flex-direction:column;gap:10px;min-height:0;}
+#ccScreen .cc-sys{align-self:center;font-size:11px;color:rgba(255,255,255,.5);background:rgba(255,255,255,.09);border-radius:9px;padding:2px 9px;}
+#ccScreen .cc-line{display:flex;gap:8px;max-width:88%;}
+#ccScreen .cc-line.me{align-self:flex-end;flex-direction:row-reverse;}
+#ccScreen .cc-line.them{align-self:flex-start;}
+#ccScreen .cc-line-av{width:34px;height:34px;border-radius:6px;overflow:hidden;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:13px;color:#5A5A52;background:#E8E8E8;}
+#ccScreen .cc-line-av img{width:100%;height:100%;object-fit:cover;}
+#ccScreen .cc-line-main{min-width:0;}
+#ccScreen .cc-line-name{font-size:11px;color:rgba(255,255,255,.45);margin-bottom:3px;padding:0 2px;}
+#ccScreen .cc-line.me .cc-line-name{text-align:right;color:rgba(255,255,255,.5);}
+#ccScreen .cc-body{position:relative;background:#FFFFFF;color:#191919;border-radius:4px;padding:9px 12px;font-size:15px;line-height:1.6;word-break:break-word;overflow-wrap:anywhere;cursor:default;}
+#ccScreen .cc-line.me .cc-body{background:#E8E8E8;color:#191919;}
+#ccScreen .cc-body::after{content:"";position:absolute;top:9px;width:0;height:0;border-top:6px solid transparent;border-bottom:6px solid transparent;}
+#ccScreen .cc-line.them .cc-body::after{left:-7px;border-right:7px solid #FFFFFF;}
+#ccScreen .cc-line.me .cc-body::after{right:-7px;border-left:7px solid #E8E8E8;}
+#ccScreen .cc-voiceline{display:inline-flex;align-items:center;gap:8px;font-size:15px;cursor:pointer;min-width:78px;-webkit-user-select:none;user-select:none;}
+#ccScreen .cc-voiceplay{font-size:10px;opacity:.75;}
+#ccScreen .cc-empty{text-align:center;font-size:12px;color:rgba(255,255,255,.35);padding:16px 0;}
+
+/* 底部操作区 */
+#ccScreen .cc-bottom{position:relative;z-index:4;flex:0 0 auto;padding:10px 16px 22px;background:linear-gradient(180deg,rgba(12,13,16,0),rgba(12,13,16,.9) 46%);}
+#ccScreen.cc-incoming .cc-bottom,#ccScreen.cc-outgoing .cc-bottom{padding:0 16px 30px;background:transparent;}
+#ccScreen.cc-incoming .cc-stage,#ccScreen.cc-outgoing .cc-stage{flex:1 1 auto;height:auto;padding-bottom:10px;}
+#ccScreen .cc-tip{text-align:center;font-size:13px;color:rgba(255,255,255,.5);letter-spacing:.3px;padding:0 0 24px;}
+#ccScreen .cc-bar{display:flex;align-items:flex-start;justify-content:center;gap:34px;padding:0 16px 10px;flex:0 0 auto;}
+#ccScreen .cc-key{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:0;}
+#ccScreen .cc-btn{width:66px;height:66px;border-radius:50%;border:none;background:#2C2E32;color:#fff;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;transition:background .15s,color .15s;-webkit-tap-highlight-color:transparent;}
+#ccScreen .cc-btn.lit{background:#F4F5F7;color:#15171A;}
+#ccScreen .cc-btn.rec{background:#F4F5F7;color:#D44040;animation:ccrec 1.6s infinite;}
+#ccScreen .cc-lb{font-size:12px;line-height:15px;color:rgba(255,255,255,.72);white-space:nowrap;max-width:96px;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,.5);}
+#ccScreen .cc-lb.rec{color:#FFA8A8;}
+#ccScreen .cc-hang{width:70px;height:70px;border-radius:50%;border:none;background:#D44040;color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;padding:0;cursor:pointer;flex-shrink:0;box-shadow:0 8px 22px rgba(0,0,0,.42);}
+#ccScreen .cc-hang:active{background:#C33A3A;}
+#ccScreen .cc-hang.big{width:78px;height:78px;margin:0;box-shadow:none;}
+#ccScreen .cc-hang.light{background:#F4F5F7;color:#D44040;box-shadow:0 8px 24px rgba(0,0,0,.45);margin:22px auto 0;}
+#ccScreen .cc-hang.light:active{background:#E6E8EC;}
+#ccScreen .cc-answerrow{display:flex;align-items:center;justify-content:space-between;padding:20px 46px 0;}
+#ccScreen .cc-round{width:78px;height:78px;border-radius:50%;border:none;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0;}
+#ccScreen .cc-round.no{background:#D44040;color:#fff;}
+#ccScreen .cc-round.ok{background:#07C160;color:#fff;}
+#ccScreen .cc-roundwrap{display:flex;flex-direction:column;align-items:center;gap:8px;}
+#ccScreen .cc-roundlb{font-size:12px;color:rgba(255,255,255,.7);}
+#ccScreen .cc-endtip{text-align:center;font-size:14px;color:rgba(255,255,255,.6);padding:20px 0;}
+
+/* 语音通话三键 */
+#ccScreen .cc-actions{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+#ccScreen .cc-actwrap{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:9px;}
+#ccScreen .cc-act{width:66px;height:66px;border-radius:50%;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;background:#2C2E32;color:#fff;transition:background .15s,color .15s;}
+#ccScreen .cc-act.rec{background:#F4F5F7;color:#D44040;animation:ccrec 1.6s infinite;}
+#ccScreen .cc-act.cchang{background:#D44040;color:#fff;box-shadow:0 8px 20px rgba(212,64,64,.35);}
+#ccScreen .cc-act.open{background:#F4F5F7;color:#15171A;}
+#ccScreen .cc-actlabel{font-size:12px;color:rgba(255,255,255,.62);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+#ccScreen .cc-actlabel.rec{color:#FFA8A8;}
+
+/* 录音条 / 打字行 */
+#ccScreen .cc-recbar{display:flex;align-items:center;justify-content:center;gap:7px;margin:0 auto 10px;max-width:290px;background:rgba(212,64,64,.16);border:1px solid rgba(212,64,64,.4);color:#FFD9D9;font-size:12px;padding:7px 14px;border-radius:14px;cursor:pointer;}
+#ccScreen .cc-recdot{width:7px;height:7px;border-radius:50%;background:#FF6B6B;flex:0 0 auto;animation:ccblink 1.4s infinite;}
+#ccScreen .cc-inputrow{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+#ccScreen .cc-input{flex:1;min-width:0;border:none;border-radius:18px;padding:10px 14px;font-size:14px;outline:none;background:rgba(255,255,255,.16);color:#fff;font-family:inherit;}
+#ccScreen .cc-input::placeholder{color:rgba(255,255,255,.4);}
+#ccScreen .cc-send{border:none;border-radius:16px;padding:9px 15px;font-size:13px;background:#D8DCE1;color:#1A1C1F;cursor:pointer;flex-shrink:0;font-family:inherit;}
+
+/* 更多面板 */
+#ccScreen .cc-sheet{position:absolute;inset:0;z-index:11;display:flex;flex-direction:column;justify-content:flex-end;background:rgba(0,0,0,.5);}
+#ccScreen .cc-sheetcard{background:#1A1C20;border-radius:18px 18px 0 0;padding:10px 12px 16px;}
+#ccScreen .cc-sheettitle{text-align:center;font-size:12px;color:rgba(255,255,255,.45);padding:6px 0 8px;}
+#ccScreen .cc-sheetrow{width:100%;display:flex;align-items:center;gap:12px;border:none;background:none;color:#EEF0F3;font-size:14px;font-family:inherit;padding:13px 10px;border-radius:12px;cursor:pointer;text-align:left;}
+#ccScreen .cc-sheetrow:active{background:rgba(255,255,255,.08);}
+#ccScreen .cc-sheetrow svg{flex:0 0 auto;opacity:.85;}
+#ccScreen .cc-sheetrow span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#ccScreen .cc-sheetcancel{margin-top:8px;width:100%;border:none;background:rgba(255,255,255,.09);color:#EDEFF2;font-size:14px;font-family:inherit;padding:12px 0;border-radius:12px;cursor:pointer;}
+
+/* 提示气泡 */
+#ccScreen .cc-hint{position:absolute;top:auto;bottom:186px;left:50%;transform:translateX(-50%);z-index:12;max-width:calc(100% - 108px);background:rgba(0,0,0,.78);color:#fff;font-size:12px;line-height:1.5;padding:7px 14px;border-radius:14px;text-align:center;word-break:break-word;}
+
+/* 小窗：永远浮在整个应用的所有界面之上（设置面板 999、导出弹窗 3000、确认框 99999 都在它下面） */
+#ccMiniWrap{position:fixed;top:0;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;z-index:999999;pointer-events:none;touch-action:none;}
+#ccMiniWrap.cc-hide{display:none !important;}
+#ccMini{position:absolute;right:12px;bottom:96px;cursor:grab;width:134px;border-radius:18px;background:rgba(12,13,16,.96);color:#fff;box-shadow:0 8px 26px rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.08);overflow:hidden;pointer-events:auto;touch-action:none;-webkit-user-select:none;user-select:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}
+#ccMini .cc-minihead{display:flex;align-items:center;gap:6px;padding:9px 10px 0;font-size:12px;font-weight:600;letter-spacing:.4px;color:#F2F4F7;cursor:grab;touch-action:none;font-variant-numeric:tabular-nums;}
+#ccMini .cc-minidot{width:6px;height:6px;border-radius:50%;background:#D8DCE1;flex:0 0 auto;animation:ccblink 1.4s infinite;}
+#ccMini .cc-miniic{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:14px;height:14px;color:#D8DCE1;}
+#ccMini .cc-minibody{display:flex;flex-direction:column;align-items:center;gap:4px;padding:5px 9px 9px;cursor:pointer;touch-action:none;}
+#ccMini .cc-miniav{width:42px;height:42px;border-radius:11px;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:17px;color:#5A5A52;background:#E8E8E8;}
+#ccMini .cc-miniav img{width:100%;height:100%;object-fit:cover;}
+#ccMini .cc-mininame{font-size:11px;max-width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;}
+#ccMini .cc-minibtns{display:flex;border-top:1px solid rgba(255,255,255,.1);}
+#ccMini .cc-minibtn{flex:1;border:none;background:none;color:#fff;font-size:11px;padding:7px 0;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;}
+#ccMini .cc-minibtn.no{color:#FF7B7B;}
+
+@keyframes ccrec{0%{box-shadow:0 0 0 0 rgba(212,64,64,.62);}70%{box-shadow:0 0 0 13px rgba(212,64,64,0);}100%{box-shadow:0 0 0 0 rgba(212,64,64,0);}}
+@keyframes ccblink{0%,100%{opacity:1;}50%{opacity:.25;}}
+
+/* 和参考版一致：视频通话的字幕流留白更紧一点 */
+#ccScreen.cc-video .cc-stream{padding:2px 16px 6px;}
+/* 视频通话里的提示放左下角，避开右上角的小窗和底部按钮 */
+#ccScreen.cc-video .cc-hint{top:auto;bottom:210px;left:12px;transform:none;max-width:58%;text-align:left;}
+/* 通话里的系统提示（字小、不抢戏） */
+
+/* 和参考版一致：视频来电 / 拨出中，中间那块不显示空字幕区 */
+#ccScreen.cc-video.cc-incoming .cc-stream,#ccScreen.cc-video.cc-outgoing .cc-stream{display:none;}
+
+</style>
+<script id="ccModuleScript">
+/* ===================== 通话模块（语音 / 视频，私聊）=====================
+   移植自参考版「未加密第5版AN10.23」：全屏通话页 + 小窗 + 来电接听/拒绝 +
+   录音 / 打字 / 摄像头 / 翻转 / 模糊背景 + 用「回复词条」各分组字卡当通话台词。
+   ==================================================================== */
+(function () {
+'use strict';
+if (window.__ccBooted) return;
+window.__ccBooted = true;
+
+/* ---------------- 基础工具 ---------------- */
+function A() { return window._chatAppRef || window.chatApp || null; }
+function toast(msg, type) {
+  var a = A();
+  if (a && typeof a.showNotification === 'function') { try { a.showNotification(msg, type); } catch (e) {} }
+}
+function notify(title, body) {
+  var a = A();
+  if (a && typeof a.sendSimpleNotification === 'function') { try { a.sendSimpleNotification(title, body); } catch (e) {} }
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function clampNum(v, lo, hi, def) {
+  var n = Number(v);
+  if (!isFinite(n) || n === 0 && v !== 0) n = def;
+  if (!isFinite(n)) n = def;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+function mmss(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  var m = Math.floor(sec / 60), s = sec % 60;
+  return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+}
+function durText(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  var m = Math.floor(sec / 60), s = sec % 60;
+  return (m > 0 ? m + '分' : '') + s + '秒';
+}
+
+/* ---------------- 图标 ---------------- */
+var I = {
+  hang: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none"><g transform="rotate(135 12 12)"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill="currentColor"/></g></svg>',
+  hangWhite: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none"><g transform="rotate(135 12 12)"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill="#fff"/></g></svg>',
+  answer: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill="currentColor"/></svg>',
+  rejectBig: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none"><g transform="rotate(135 12 12)"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill="#fff"/></g></svg>',
+  min: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2.8" y="2.8" width="12.4" height="12.4" rx="3.2" stroke="currentColor" stroke-width="1.8"/><rect x="9" y="9" width="12.2" height="12.2" rx="3.2" fill="currentColor"/></svg>',
+  flip: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 9a8 8 0 0113.6-3.6M20 15A8 8 0 016.4 18.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M17.5 2v4h-4M6.5 22v-4h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  blur: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="4.5" width="18" height="15" rx="3.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.6 15.6l4.3-4.1 3.4 3.2 3.1-2.9 5.9 5.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/><circle cx="15.6" cy="9.4" r="1.7" fill="currentColor" opacity=".85"/></svg>',
+  camOn: '<svg width="27" height="27" viewBox="0 0 24 24" fill="none"><rect x="1.8" y="6" width="12.6" height="12" rx="3.4" fill="currentColor"/><path d="M15.4 10.6l5.2-3.1v9l-5.2-3.1v-2.8z" fill="currentColor"/></svg>',
+  camOff: '<svg width="27" height="27" viewBox="0 0 24 24" fill="none"><rect x="1.8" y="6" width="12.6" height="12" rx="3.4" fill="currentColor"/><path d="M15.4 10.6l5.2-3.1v9l-5.2-3.1v-2.8z" fill="currentColor"/><path d="M3.2 20.8L20.8 3.2" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>',
+  mic: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0013 0M12 18v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  stop: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="10" height="10" rx="2.6" fill="currentColor"/></svg>',
+  dots: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><g fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></g></svg>',
+  call: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill="currentColor"/></svg>',
+  camSmall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="2" y="6" width="13" height="12" rx="3" fill="currentColor"/><path d="M16 10.5l5-3v9l-5-3v-3z" fill="currentColor"/></svg>',
+  text: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2.5" y="6" width="19" height="12" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 14h9M6.5 10h1M10.5 10h1M14.5 10h1M17.8 10h.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  switchKind: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7 8h10l-3-3M17 16H7l3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  rec: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></svg>',
+  close: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 16L16 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  img: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="8" r="1.6" fill="currentColor"/><path d="M3.5 14l4-4 3.5 3.5 2.5-2.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  broom: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M4 16L16 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
+};
+
+/* ---------------- 状态 ---------------- */
+var S = {
+  open: false, state: 'idle', kind: 'voice',
+  peerName: '', peerFace: '', selfName: '', selfFace: '',
+  stream: [], elapsed: 0, startedAt: 0, ringLeft: 0, statusText: '',
+  camOn: false, facing: 'user', bgBlur: false, selfBig: false,
+  recOn: false, recSec: 0, typing: false, more: false, minimized: false,
+  byMe: true, hint: '', hintTimer: null,
+  pipX: 0, pipY: 0, miniX: null, miniY: null
+};
+var T = {};                 // 定时器
+var M = { camStream: null, recorder: null, chunks: [], recStream: null, recUrl: null, fakeRec: false };
+
+/* ---------------- 设置 ---------------- */
+function cs() { var a = A(); return (a && a.appData && a.appData.communicationSettings) || {}; }
+function extra() {
+  var e = cs().callExtra || {};
+  return {
+    ringSec: clampNum(e.ringSec == null ? 30 : e.ringSec, 5, 180, 30),
+    waitSec: clampNum(e.waitSec == null ? 30 : e.waitSec, 5, 180, 30)
+  };
+}
+function rejectCfg() {
+  var a = A(); var r = null;
+  try { r = a && a.dataManager && a.dataManager.getRejectSettings && a.dataManager.getRejectSettings(); } catch (e) {}
+  r = r || { enabled: false, probability: 30 };
+  return { enabled: !!r.enabled, probability: clampNum(r.probability, 0, 100, 30) };
+}
+function autoAccept(kind) {
+  var c = cs();
+  if (kind === 'video') return c.autoAcceptVideos !== false;
+  return c.autoAcceptCalls !== false;
+}
+function videoRate() {
+  var pref = cs().activeCallSettings && cs().activeCallSettings.callPreference;
+  var voiceRate = (pref == null) ? 50 : clampNum(pref, 0, 100, 50);
+  return 100 - voiceRate;   // 「呼叫类型偏好」里的视频占比
+}
+function pickKind() { return Math.random() * 100 < videoRate() ? 'video' : 'voice'; }
+
+/* ---------------- 通话背景（语音 / 视频各自一张，设置里上传的那张作兜底） ---------------- */
+var BG_KEY = { voice: 'cc_call_bg_voice_v1', video: 'cc_call_bg_video_v1' };
+function bgImage(kind) {
+  var k = BG_KEY[kind === 'video' ? 'video' : 'voice'];
+  try {
+    var v = localStorage.getItem(k);
+    if (v) return v;
+  } catch (e) {}
+  var a = A();
+  try {
+    if (a && a.dataManager && typeof a.dataManager.getCallBackground === 'function') {
+      return a.dataManager.getCallBackground() || '';
+    }
+  } catch (e) {}
+  return '';
+}
+function setBg(url) {
+  var k = BG_KEY[S.kind === 'video' ? 'video' : 'voice'];
+  try {
+    if (url) localStorage.setItem(k, url);
+    else localStorage.removeItem(k);
+  } catch (e) {}
+  var prev = document.getElementById('callBgPreview');
+  if (prev && url) {
+    prev.style.backgroundImage = 'url(' + url + ')';
+    prev.style.backgroundSize = 'cover';
+    prev.style.backgroundPosition = 'center';
+  }
+}
+function pickBg() {
+  var inp = document.getElementById('ccBgInput');
+  if (!inp) return;
+  try { inp.value = ''; } catch (e) {}
+  inp.click();
+}
+function handleBgPick(ev) {
+  var f = ev && ev.target && ev.target.files && ev.target.files[0];
+  if (!f) return;
+  var r = new FileReader();
+  r.onload = function () {
+    var u = String(r.result || '');
+    if (!u) return;
+    setBg(u);
+    render();
+    showHint('🖼 通话背景已保存，以后打' + (S.kind === 'video' ? '视频' : '语音') + '电话都用它');
+  };
+  try { r.readAsDataURL(f); } catch (e) {}
+}
+function clearBg() {
+  setBg('');
+  render();
+  toast('已清除这个通话背景');
+}
+
+/* ---------------- 字卡池（回复词条里各分组的字卡） ---------------- */
+function phrasePool() {
+  var a = A(); if (!a) return [];
+  var list = [];
+  try {
+    if (a.appData && a.appData.responsePhrases && a.appData.responsePhrases.length) {
+      list = a.appData.responsePhrases.slice();
+    }
+  } catch (e) {}
+  if (!list.length) {
+    try { list = a.dataManager.getAllEnabledPhrases() || []; } catch (e) {}
+  }
+  if (!list.length) {
+    try {
+      ((a.appData.phraseGroups && a.appData.phraseGroups.groups) || []).forEach(function (g) {
+        if (g && g.phrases && g.phrases.length) list = list.concat(g.phrases);
+      });
+    } catch (e) {}
+  }
+  return list.filter(function (x) { return typeof x === 'string' && x.trim(); })
+             .map(function (x) { return x.trim(); });
+}
+var recentLines = [];
+function pickLines(n) {
+  var pool = phrasePool();
+  if (!pool.length) return ['……'];
+  var out = [];
+  var keep = Math.min(14, Math.max(3, pool.length - 1));
+  for (var i = 0; i < n; i++) {
+    var cand = pool.filter(function (p) { return recentLines.indexOf(p) < 0; });
+    if (!cand.length) { recentLines = []; cand = pool; }
+    var one = cand[Math.floor(Math.random() * cand.length)];
+    recentLines.push(one);
+    while (recentLines.length > keep) recentLines.shift();
+    out.push(one);
+  }
+  return out;
+}
+
+/* ---------------- 通话记录（写进聊天） ---------------- */
+function logCall(status, opt) {
+  var a = A(); if (!a) return;
+  opt = opt || {};
+  var kindTxt = S.kind === 'video' ? '视频通话' : '语音通话';
+  var byMe = (typeof opt.byMe === 'boolean') ? opt.byMe : S.byMe;
+  var sender = 'self', title = '', dur = '';
+  if (status === 'ended') {
+    sender = byMe ? 'self' : 'other';
+    title = kindTxt + ' 通话时长 ' + durText(S.elapsed);
+    dur = mmss(S.elapsed);
+  } else if (status === 'cancelled') {
+    sender = 'self'; title = kindTxt + ' 已取消';
+  } else if (status === 'rejected') {
+    if (byMe) { sender = 'self'; title = '已拒绝通话'; }
+    else { sender = 'other'; title = (S.peerName || '对方') + ' 拒绝了一通' + kindTxt; }
+  } else if (status === 'missed') {
+    sender = 'other'; title = '未接来电';
+  } else if (status === 'noanswer') {
+    sender = 'self'; title = (S.peerName || '对方') + ' 没有接听';
+  }
+  try {
+    a.appData.messages.push({
+      id: a.dataManager.generateMessageId(),
+      type: S.kind === 'video' ? 'video' : 'call',
+      title: title,
+      duration: dur,
+      sender: sender,
+      time: a.getCurrentTime(),
+      read: true
+    });
+    if (typeof a.renderMessages === 'function') a.renderMessages();
+    if (typeof a.markDirty === 'function') a.markDirty();
+  } catch (e) { console.warn('通话记录写入失败', e); }
+}
+
+/* ---------------- 统计 ---------------- */
+function bumpStats(kind, durSec) {
+  var c = cs(); if (!c) return;
+  if (kind === 'video') {
+    c.todayVideos = (c.todayVideos || 0) + 1;
+    c.totalVideoTime = (c.totalVideoTime || 0) + Math.max(0, Math.round(durSec || 0));
+  } else {
+    c.todayCalls = (c.todayCalls || 0) + 1;
+    c.totalCallTime = (c.totalCallTime || 0) + Math.max(0, Math.round(durSec || 0));
+  }
+  var a = A();
+  try { if (a && typeof a.renderCommunicationStats === 'function') a.renderCommunicationStats(); } catch (e) {}
+  try { if (a && typeof a.markDirty === 'function') a.markDirty(); } catch (e) {}
+}
+
+/* ---------------- 摄像头 ---------------- */
+function stopCam() {
+  if (M.camStream) {
+    try { M.camStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    M.camStream = null;
+  }
+  S.camOn = false;
+}
+function attachStream() {
+  var v = document.getElementById('ccSelfVideo');
+  if (v && M.camStream) {
+    try { v.srcObject = M.camStream; v.play().catch(function () {}); } catch (e) {}
+  }
+}
+function startCam() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    S.camOn = false; showHint('这个浏览器不支持打开摄像头'); return;
+  }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: S.facing }, audio: false })
+    .then(function (st) {
+      if (M.camStream) { try { M.camStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+      M.camStream = st;
+      S.camOn = true;
+      attachStream();
+      render();
+    })
+    .catch(function () {
+      S.camOn = false;
+      render();
+      showHint('没拿到摄像头权限：画面用不了，去系统设置里允许一下就好');
+    });
+}
+
+/* ---------------- 录音 ---------------- */
+function stopRecStream() {
+  if (M.recStream) {
+    try { M.recStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    M.recStream = null;
+  }
+}
+function beginRecord() {
+  S.recOn = true; S.recSec = 0; M.fakeRec = false; M.chunks = []; M.recUrl = null;
+  render();
+  if (T.rec) clearInterval(T.rec);
+  T.rec = setInterval(function () {
+    if (!S.open || !S.recOn) { clearInterval(T.rec); T.rec = null; return; }
+    S.recSec++;
+    var bar = document.querySelector('#ccScreen .cc-recbar span[data-sec]');
+    if (bar) bar.textContent = '录音中 ' + S.recSec + ' 秒 · 点这里结束并发送';
+    var lb = document.querySelector('#ccScreen [data-rec]');
+    if (lb) lb.textContent = '录音中 ' + S.recSec + ' 秒';
+  }, 1000);
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) throw new Error('no media');
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (st) {
+      if (!S.recOn) { try { st.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} return; }
+      M.recStream = st;
+      try {
+        M.recorder = new MediaRecorder(st);
+        M.recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) M.chunks.push(ev.data); };
+        M.recorder.start();
+      } catch (e) { M.fakeRec = true; }
+    }).catch(function () { M.fakeRec = true; });
+  } catch (e) { M.fakeRec = true; }
+}
+function endRecord(send) {
+  var sec = S.recSec || 1;
+  S.recOn = false;
+  if (T.rec) { clearInterval(T.rec); T.rec = null; }
+  var hasRecorder = false;
+  try {
+    if (M.recorder && M.recorder.state !== 'inactive') {
+      hasRecorder = true;
+      M.recorder.onstop = function () {
+        try {
+          var blob = new Blob(M.chunks, { type: 'audio/webm' });
+          if (blob.size) M.recUrl = URL.createObjectURL(blob);
+        } catch (e) {}
+        if (send) pushLine({ from: 'me', kind: 'voice', dur: sec, src: M.recUrl });
+        M.recorder = null;
+      };
+      M.recorder.stop();
+    }
+  } catch (e) { hasRecorder = false; }
+  stopRecStream();
+  if (!hasRecorder) {
+    M.recorder = null;
+    if (send) pushLine({ from: 'me', kind: 'voice', dur: sec, src: M.recUrl });
+  }
+  render();
+}
+function toggleRecord() {
+  if (S.recOn) { endRecord(true); } else { beginRecord(); }
+}
+
+/* ---------------- 台词流 ---------------- */
+function pushLine(e) {
+  if (!e) return;
+  e.ts = Date.now();
+  e.id = 'cc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  S.stream.push(e);
+  if (S.stream.length > 300) S.stream.splice(0, S.stream.length - 300);
+  appendLine(e);
+  if (S.minimized) updateMini();
+}
+function appendLine(e) {
+  var box = document.getElementById('ccStream');
+  if (!box) return;
+  var empty = box.querySelector('.cc-empty');
+  if (empty) empty.remove();
+  box.appendChild(lineNode(e));
+  box.scrollTop = box.scrollHeight;
+}
+function lineNode(e) {
+  var d = document.createElement('div');
+  if (e.from === 'sys') { d.className = 'cc-sys'; d.textContent = e.body; return d; }
+  var mine = e.from === 'me';
+  d.className = 'cc-line ' + (mine ? 'me' : 'them');
+  var name = mine ? (S.selfName || '我') : (S.peerName || '对方');
+  var face = mine ? S.selfFace : S.peerFace;
+  var av = '<div class="cc-line-av">' + (face ? '<img src="' + esc(face) + '" alt="">' : esc((name || '?').charAt(0))) + '</div>';
+  var body = '';
+  if (e.kind === 'voice') {
+    body = '<div class="cc-body"><span class="cc-voiceline" data-play="' + esc(e.src || '') + '">' +
+           '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 10v4M8 7v10M12 9v6M16 11v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' +
+           '<span>' + (e.dur || 1) + '&#8243;</span>' + (e.src ? '<span class="cc-voiceplay">&#9654;</span>' : '') +
+           '</span></div>';
+  } else {
+    body = '<div class="cc-body">' + esc(e.body).replace(/\n/g, '<br>') + '</div>';
+  }
+  d.innerHTML = av + '<div class="cc-line-main"><div class="cc-line-name">' + esc(name) + '</div>' + body + '</div>';
+  return d;
+}
+function renderStream() {
+  var box = document.getElementById('ccStream');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!S.stream.length) {
+    var t = '';
+    if (S.state === 'active') t = '通话已接通，等对方开口…';
+    else if (S.state === 'incoming') t = '对方正在呼叫你，点下面的「接听」就能开始';
+    else if (S.state === 'outgoing') t = '已经拨出去了，对方接听之后这里就会出现对话';
+    else t = '通话已结束';
+    box.innerHTML = '<div class="cc-empty">' + t + '</div>';
+    return;
+  }
+  var frag = document.createDocumentFragment();
+  S.stream.forEach(function (e) { frag.appendChild(lineNode(e)); });
+  box.appendChild(frag);
+  box.scrollTop = box.scrollHeight;
+}
+
+/* ---------------- 对方说话 ---------------- */
+function aiRound(count) {
+  if (!S.open || S.state !== 'active') return;
+  var n = count || (Math.random() < 0.45 ? 2 : 1);
+  var lines = pickLines(n);
+  var acc = 500 + Math.random() * 1100;
+  lines.forEach(function (txt) {
+    var d = acc; acc += 700 + Math.random() * 1500;
+    setTimeout(function () {
+      if (!S.open || S.state !== 'active') return;
+      pushLine({ from: 'them', kind: 'text', body: txt });
+    }, d);
+  });
+}
+function scheduleAi(delay) {
+  if (T.ai) { clearTimeout(T.ai); T.ai = null; }
+  var wait = delay == null ? (3500 + Math.random() * 4500) : delay;
+  T.ai = setTimeout(function () {
+    if (!S.open || S.state !== 'active') return;
+    aiRound();
+    scheduleAi();
+  }, wait);
+}
+
+/* ---------------- 渲染 ---------------- */
+function ensureDom() {
+  if (!document.getElementById('ccScreen')) {
+    var d = document.createElement('div');
+    d.id = 'ccScreen'; d.className = 'cc-hide';
+    document.body.appendChild(d);
+  }
+  if (!document.getElementById('ccMiniWrap')) {
+    var m = document.createElement('div');
+    m.id = 'ccMiniWrap'; m.className = 'cc-hide';
+    document.body.appendChild(m);
+  }
+  if (!document.getElementById('ccBgInput')) {
+    var f = document.createElement('input');
+    f.type = 'file'; f.id = 'ccBgInput'; f.accept = 'image/*';
+    f.style.display = 'none';
+    document.body.appendChild(f);
+  }
+}
+function avatarHtml(face, name, cls) {
+  return '<div class="' + cls + '">' + (face ? '<img src="' + esc(face) + '" alt="">' : esc((name || '?').charAt(0))) + '</div>';
+}
+function shellHtml() {
+  var kindTxt = S.kind === 'video' ? '视频通话' : '语音通话';
+  var h = '';
+  var bg = bgImage(S.kind);
+
+  if (bg) {
+    /* 自己设的通话背景：默认就是清晰的，只有点了「模糊」才糊掉 */
+    h += '<div class="cc-bgimg' + (S.bgBlur ? ' blur' : '') + '" style="background-image:url(&quot;' + esc(bg) + '&quot;)"></div>';
+  } else if (S.kind === 'video' || (S.peerFace && S.state === 'active')) {
+    /* 没设背景：语音和视频一样，用对方头像铺满当背景（语音只在通话中铺，来电/拨出中还是干净的深色底） */
+    h += '<div class="cc-bg' + (S.peerFace ? '' : ' noface') + (S.bgBlur ? ' blur' : '') + '">' +
+         (S.peerFace ? '<img class="cc-bgavatar" src="' + esc(S.peerFace) + '" alt="">' : '') + '</div>';
+  }
+
+  /* 顶栏 */
+  if (S.kind === 'video') {
+    h += '<div class="cc-nav">' +
+         '<button class="cc-navbtn" data-act="min" title="收起成小窗">' + I.min + '</button>' +
+         '<div class="cc-navtitle" id="ccNavTitle">' + navTitleText() + '</div>' +
+         (S.state === 'active'
+           ? '<button class="cc-navbtn" data-act="flip" title="切换前后镜头">' + I.flip + '</button>'
+           : '<span class="cc-navsp"></span>') +
+         '</div>';
+  } else {
+    h += '<div class="cc-nav">' +
+         '<button class="cc-navbtn" data-act="min" title="收起成小窗">' + I.min + '</button>' +
+         '<div class="cc-navtitle" id="ccNavTitle">' + navTitleText() + '</div>' +
+         '<span class="cc-navsp"></span>' +
+         '</div>';
+  }
+
+  /* 中间：语音大头像 / 视频对方头像 */
+  if (S.kind === 'video') {
+    /* 自己铺满整屏时，垫在最底层（气泡和按钮都还在它上面） */
+    if (S.selfBig) {
+      h += '<div class="cc-fullself">' +
+           (S.camOn
+             ? '<video id="ccSelfVideo" playsinline muted autoplay style="' + (S.facing === 'user' ? 'transform:scaleX(-1);' : '') + '"></video>'
+             : '<div class="cc-full-av">' + (S.selfFace ? '<img src="' + esc(S.selfFace) + '" alt="">' : esc((S.selfName || '我').charAt(0))) + '</div>') +
+           '</div>';
+    }
+    h += '<div class="cc-stage">' +
+         avatarHtml(S.peerFace, S.peerName, 'cc-stageav') +
+         (S.state !== 'active' ? '<div class="cc-stagename">' + esc(S.peerName) + '</div>' : '') +
+         '</div>';
+    if (S.state === 'active') {
+      /* 小窗：平时显示自己；自己已经铺满整屏时，小窗换成对方（再点一下就换回来） */
+      h += '<div class="cc-pip" id="ccPip" title="拖得动 · 点一下切换大小画面"' +
+           ' style="transform:translate(' + (S.pipX || 0) + 'px,' + (S.pipY || 0) + 'px);">' +
+           (S.selfBig
+             ? avatarHtml(S.peerFace, S.peerName, 'cc-pipav')
+             : (S.camOn
+                 ? '<video id="ccSelfVideo" playsinline muted autoplay style="' + (S.facing === 'user' ? 'transform:scaleX(-1);' : '') + '"></video>'
+                 : avatarHtml(S.selfFace, S.selfName, 'cc-pipav'))) +
+           '</div>';
+    }
+  } else {
+    h += '<div class="cc-hero">' +
+         avatarHtml(S.peerFace, S.peerName, 'cc-heroav') +
+         '<div class="cc-heroname">' + esc(S.peerName) + '</div>' +
+         '</div>';
+  }
+
+  /* 字幕流 */
+  h += '<div class="cc-stream" id="ccStream"></div>';
+
+  /* 底部 */
+  h += '<div class="cc-bottom">' + bottomHtml() + '</div>';
+
+  /* 提示 */
+  if (S.hint) h += '<div class="cc-hint" id="ccHint">' + esc(S.hint) + '</div>';
+
+  /* 更多面板 */
+  if (S.more && S.state === 'active') {
+    var hasBg = !!bgImage(S.kind);
+    /* 和参考版的私聊通话一致：打字、背景、恢复默认、模糊/清晰、转语音视频、取消，不多不少 */
+    h += '<div class="cc-sheet" data-act="moreClose">' +
+         '<div class="cc-sheetcard">' +
+         '<div class="cc-sheettitle">通话小工具</div>' +
+         '<button class="cc-sheetrow" data-act="typing">' + I.text + '<span>' + (S.typing ? '收起输入框' : '打字回复') + '</span></button>' +
+         '<button class="cc-sheetrow" data-act="setbg">' + I.img + '<span>' + (hasBg ? '换一张通话背景' : '设置通话背景') + '</span></button>' +
+         (hasBg ? '<button class="cc-sheetrow" data-act="clearbg">' + I.broom + '<span>恢复默认背景</span></button>' : '') +
+         (((S.kind === 'video' && S.camOn) || (!S.peerFace && !hasBg)) ? '' :
+           '<button class="cc-sheetrow" data-act="blur">' + I.blur + '<span>' + (hasBg ? '设置的背景' : '默认背景') + (S.bgBlur ? '：模糊' : '：清晰') + '</span></button>') +
+         '<button class="cc-sheetrow" data-act="switch">' + I.switchKind + '<span>' + (S.kind === 'video' ? '转成语音通话' : '转成视频通话') + '</span></button>' +
+         '<button class="cc-sheetcancel" data-act="moreClose">取消</button>' +
+         '</div></div>';
+  }
+  return h;
+}
+function navTitleText() {
+  if (S.state === 'active') return mmss(S.elapsed);
+  if (S.state === 'incoming') return '还剩 ' + S.ringLeft + ' 秒';
+  if (S.state === 'outgoing') return '正在呼叫对方…';
+  return S.statusText || '通话已结束';
+}
+function bottomHtml() {
+  var kindTxt = S.kind === 'video' ? '视频通话' : '语音通话';
+  var h = '';
+
+  if (S.state === 'incoming') {
+    return '<div class="cc-tip">' + esc(S.peerName || '对方') + ' 邀请你' + kindTxt + '…</div>' +
+           '<div class="cc-answerrow">' +
+           '<div class="cc-roundwrap"><button class="cc-round no" data-act="reject">' + I.rejectBig + '</button><span class="cc-roundlb">拒绝</span></div>' +
+           '<div class="cc-roundwrap"><button class="cc-round ok" data-act="answer">' + I.answer + '</button><span class="cc-roundlb">接听</span></div>' +
+           '</div>';
+  }
+
+  if (S.state === 'outgoing') {
+    if (S.kind === 'video') {
+      return '<div class="cc-tip">等待对方接受邀请…</div>' +
+             '<div class="cc-bar">' +
+             '<div class="cc-key"><button class="cc-btn" data-act="flip">' + I.flip + '</button><span class="cc-lb">翻转</span></div>' +
+             '<div class="cc-key"><button class="cc-btn ' + (S.bgBlur ? 'lit' : '') + '" data-act="blur">' + I.blur + '</button><span class="cc-lb">模糊背景</span></div>' +
+             '<div class="cc-key"><button class="cc-btn ' + (S.camOn ? 'lit' : '') + '" data-act="cam">' + (S.camOn ? I.camOn : I.camOff) + '</button><span class="cc-lb">' + (S.camOn ? '摄像头已开' : '摄像头已关') + '</span></div>' +
+             '</div>' +
+             '<button class="cc-hang light" data-act="hangup" title="取消">' + I.hang + '</button>';
+    }
+    return '<div class="cc-actions">' +
+           '<div class="cc-actwrap"></div>' +
+           '<div class="cc-actwrap"><button class="cc-act cchang" data-act="hangup">' + I.hangWhite + '</button><span class="cc-actlabel">取消</span></div>' +
+           '<div class="cc-actwrap"></div>' +
+           '</div>';
+  }
+
+  if (S.state === 'active') {
+    var recBar = S.recOn
+      ? '<div class="cc-recbar" data-act="rec"><span class="cc-recdot"></span><span data-sec>录音中 ' + S.recSec + ' 秒 · 点这里结束并发送</span></div>'
+      : '';
+    var inputRow = S.typing
+      ? '<div class="cc-inputrow"><input class="cc-input" id="ccTextInput" placeholder="在通话里打字也可以…"><button class="cc-send" data-act="send">发送</button></div>'
+      : '';
+
+    if (S.kind === 'video') {
+      return recBar + inputRow +
+        '<div class="cc-bar">' +
+        '<div class="cc-key"><button class="cc-btn ' + (S.recOn ? 'rec' : '') + '" data-act="rec">' + (S.recOn ? I.stop : I.mic) + '</button>' +
+        '<span class="cc-lb' + (S.recOn ? ' rec' : '') + '" data-rec>' + (S.recOn ? '录音中 ' + S.recSec + ' 秒' : '麦克风已开') + '</span></div>' +
+        '<div class="cc-key"><button class="cc-btn ' + (S.more ? 'lit' : '') + '" data-act="more">' + I.dots + '</button><span class="cc-lb">更多</span></div>' +
+        '<div class="cc-key"><button class="cc-btn ' + (S.camOn ? 'lit' : '') + '" data-act="cam">' + (S.camOn ? I.camOn : I.camOff) + '</button>' +
+        '<span class="cc-lb">' + (S.camOn ? '摄像头已开' : '摄像头已关') + '</span></div>' +
+        '</div>' +
+        '<button class="cc-hang" data-act="hangup">' + I.hangWhite + '</button>';
+    }
+    return recBar + inputRow +
+      '<div class="cc-actions">' +
+      '<div class="cc-actwrap"><button class="cc-act ' + (S.recOn ? 'rec' : '') + '" data-act="rec">' + (S.recOn ? I.stop : I.mic) + '</button>' +
+      '<span class="cc-actlabel' + (S.recOn ? ' rec' : '') + '" data-rec>' + (S.recOn ? '录音中 ' + S.recSec + ' 秒' : '按一下录音') + '</span></div>' +
+      '<div class="cc-actwrap"><button class="cc-act cchang" data-act="hangup">' + I.hangWhite + '</button><span class="cc-actlabel">挂断</span></div>' +
+      '<div class="cc-actwrap"><button class="cc-act ' + (S.more ? 'open' : '') + '" data-act="more">' + I.dots + '</button><span class="cc-actlabel">更多</span></div>' +
+      '</div>';
+  }
+
+  return '<div class="cc-endtip">' + esc(S.statusText || '通话已结束') + '</div>';
+}
+function render() {
+  ensureDom();
+  var scr = document.getElementById('ccScreen');
+  scr.className = 'cc-screen ' +
+    (S.kind === 'video' ? 'cc-video' : 'cc-voice') +
+    (S.state === 'incoming' ? ' cc-incoming' : '') +
+    (S.state === 'outgoing' ? ' cc-outgoing' : '') +
+    (S.selfBig ? ' cc-selfbig' : '') +
+    (S.open && !S.minimized ? '' : ' cc-hide');
+  scr.innerHTML = shellHtml();
+  if (!S.minimized) renderStream();
+  if (S.camOn && M.camStream) attachStream();
+  if (S.typing && S.open && !S.minimized) {
+    var inp = document.getElementById('ccTextInput');
+    if (inp) setTimeout(function () { try { inp.focus(); } catch (e) {} }, 30);
+  }
+  updateMini();
+}
+function showHint(txt) {
+  S.hint = txt;
+  var h = document.getElementById('ccHint');
+  if (h) { h.textContent = txt; }
+  else { render(); }
+  if (S.hintTimer) clearTimeout(S.hintTimer);
+  S.hintTimer = setTimeout(function () {
+    S.hint = '';
+    var e = document.getElementById('ccHint');
+    if (e) e.remove();
+  }, 2600);
+}
+function tick() {
+  if (!S.open) return;
+  if (S.state === 'active') {
+    S.elapsed = Math.floor((Date.now() - (S.startedAt || Date.now())) / 1000);
+    var t = document.getElementById('ccNavTitle');
+    if (t) t.textContent = mmss(S.elapsed);
+  } else if (S.state === 'incoming') {
+    var t2 = document.getElementById('ccNavTitle');
+    if (t2) t2.textContent = '还剩 ' + S.ringLeft + ' 秒';
+  }
+  if (S.minimized) updateMini();
+}
+
+/* ---------------- 小窗 ---------------- */
+var miniKey = '';
+function updateMini() {
+  var wrap = document.getElementById('ccMiniWrap');
+  if (!wrap) return;
+  if (!S.open || !S.minimized) { wrap.className = 'cc-hide'; miniKey = ''; return; }
+  wrap.className = '';
+  var key = S.kind + '|' + S.state + '|' + S.peerName + '|' + S.peerFace;
+  var timer = S.state === 'active' ? mmss(S.elapsed) : (S.state === 'incoming' ? '来电' : '呼叫中');
+  if (key === miniKey && document.getElementById('ccMini')) {
+    var tm = document.getElementById('ccMiniTimer');
+    if (tm) tm.textContent = timer;
+    return;
+  }
+  miniKey = key;
+  var kindIc = S.kind === 'video' ? I.camSmall : I.call;
+  wrap.innerHTML =
+    '<div class="cc-mini" id="ccMini">' +
+    '<div class="cc-minihead" id="ccMiniHead"><span class="cc-minidot"></span>' +
+    '<span class="cc-miniic">' + kindIc + '</span><span id="ccMiniTimer">' + timer + '</span></div>' +
+    '<div class="cc-minibody" data-act="restore">' +
+    avatarHtml(S.peerFace, S.peerName, 'cc-miniav') +
+    '<div class="cc-mininame">' + esc(S.peerName) + '</div>' +
+    '</div>' +
+    '<div class="cc-minibtns">' +
+    (S.state === 'incoming'
+      ? '<button class="cc-minibtn ok" data-act="answer">接听</button><button class="cc-minibtn no" data-act="reject">拒绝</button>'
+      : '<button class="cc-minibtn no" data-act="hangup">挂断</button>') +
+    '</div></div>';
+  /* 记住上次拖到哪儿 */
+  if (S.miniX != null) {
+    var box = document.getElementById('ccMini');
+    if (box) {
+      box.style.left = S.miniX + 'px'; box.style.top = S.miniY + 'px';
+      box.style.right = 'auto'; box.style.bottom = 'auto';
+    }
+  }
+}
+/* 拖动：视频里自己的小窗、收起后的通话小窗，都能随便拖 */
+var ignoreClick = false;
+var drag = { on: false, type: '', sx: 0, sy: 0, ox: 0, oy: 0, moved: false, el: null, wrap: null, w: 0, h: 0 };
+function startDrag(ev, type) {
+  var el, wrap, ox, oy;
+  if (type === 'pip') {
+    el = document.getElementById('ccPip');
+    wrap = document.getElementById('ccScreen');
+    if (!el || !wrap) return;
+    ox = S.pipX || 0; oy = S.pipY || 0;
+  } else {
+    el = document.getElementById('ccMini');
+    wrap = document.getElementById('ccMiniWrap');
+    if (!el || !wrap) return;
+    var br = el.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+    ox = (S.miniX == null) ? (br.left - wr.left) : S.miniX;
+    oy = (S.miniY == null) ? (br.top - wr.top) : S.miniY;
+  }
+  drag.on = true; drag.type = type; drag.el = el; drag.wrap = wrap;
+  drag.sx = ev.clientX; drag.sy = ev.clientY;
+  drag.ox = ox; drag.oy = oy; drag.moved = false;
+  drag.w = el.offsetWidth; drag.h = el.offsetHeight;
+  if (type === 'mini') {
+    el.style.left = ox + 'px'; el.style.top = oy + 'px';
+    el.style.right = 'auto'; el.style.bottom = 'auto';
+  }
+  try { ev.preventDefault(); } catch (e) {}
+}
+function moveDrag(ev) {
+  if (!drag.on) return;
+  var dx = ev.clientX - drag.sx, dy = ev.clientY - drag.sy;
+  if (!drag.moved && (Math.abs(dx) + Math.abs(dy)) > 6) drag.moved = true;
+  if (!drag.moved) return;
+  try { ev.preventDefault(); } catch (e) {}
+  var wr = drag.wrap.getBoundingClientRect();
+  if (drag.type === 'pip') {
+    var baseL = wr.width - 14 - drag.w;
+    var baseT = 92;
+    var nx = Math.max(4 - baseL, Math.min((wr.width - drag.w - 4) - baseL, drag.ox + dx));
+    var ny = Math.max(58 - baseT, Math.min((wr.height - drag.h - 150) - baseT, drag.oy + dy));
+    S.pipX = Math.round(nx); S.pipY = Math.round(ny);
+    drag.el.style.transform = 'translate(' + S.pipX + 'px,' + S.pipY + 'px)';
+  } else {
+    var lx = Math.max(4, Math.min(wr.width - drag.w - 4, drag.ox + dx));
+    var ly = Math.max(4, Math.min(wr.height - drag.h - 4, drag.oy + dy));
+    S.miniX = Math.round(lx); S.miniY = Math.round(ly);
+    drag.el.style.left = S.miniX + 'px'; drag.el.style.top = S.miniY + 'px';
+  }
+}
+function endDrag() {
+  if (!drag.on) return;
+  var t = drag.type, moved = drag.moved;
+  drag.on = false;
+  drag.moved = false;
+  if (moved) {
+    ignoreClick = true;
+    setTimeout(function () { ignoreClick = false; }, 400);
+  }
+  if (t === 'pip' && !moved) {
+    S.selfBig = !S.selfBig;
+    render();
+  }
+  drag.el = null;
+}
+
+/* ---------------- 流程 ---------------- */
+function reset(kind, byMe, state) {
+  var a = A();
+  var other = (a && a.appData && a.appData.otherInfo) || {};
+  var self = (a && a.appData && a.appData.selfInfo) || {};
+  S.kind = kind === 'video' ? 'video' : 'voice';
+  S.state = state;
+  S.peerName = other.nickname || other.name || '对方';
+  S.peerFace = other.avatar || '';
+  S.selfName = self.nickname || '我';
+  S.selfFace = self.avatar || '';
+  S.stream = []; S.elapsed = 0; S.startedAt = 0; S.ringLeft = 0;
+  S.statusText = ''; S.camOn = false; S.selfBig = false; S.recOn = false; S.recSec = 0;
+  S.typing = false; S.more = false; S.minimized = false; S.byMe = !!byMe; S.hint = '';
+  S.bgBlur = false; S.pipX = 0; S.pipY = 0; S.miniX = null; S.miniY = null;
+  M.recUrl = null;
+}
+function clearTimers() {
+  ['answer', 'wait', 'auto', 'clock', 'ai', 'rec', 'close'].forEach(function (k) {
+    if (T[k]) { clearTimeout(T[k]); clearInterval(T[k]); T[k] = null; }
+  });
+}
+function openUI() {
+  ensureDom();
+  S.open = true;
+  S.minimized = false;
+  render();
+  try { var a = A(); if (a && typeof a.closeSettingsPanel === 'function') a.closeSettingsPanel(); } catch (e) {}
+  if (T.clock) clearInterval(T.clock);
+  T.clock = setInterval(tick, 1000);
+}
+function start(kind) {
+  if (S.open) { toast('当前已有通话进行中'); return; }
+  var a = A();
+  if (!a) { toast('页面还没准备好，稍等一下再试'); return; }
+  clearTimers();
+  reset(kind, true, 'outgoing');
+  openUI();
+  var wait = 2000 + Math.random() * 4000;
+  var limit = Math.max(3000, extra().waitSec * 1000);
+  var timeoutEnd = function () {
+    T.wait = null;
+    if (!S.open || S.state !== 'outgoing') return;
+    pushLine({ from: 'sys', body: '无人接听，已自动挂断' });
+    callEnded('noanswer', '无人接听', 1500, { byMe: true });
+  };
+  if (wait >= limit) {
+    // 等够「无人接听」时间还没接：直接按无人接听收尾
+    T.wait = setTimeout(timeoutEnd, limit);
+  } else {
+    T.answer = setTimeout(function () {
+      T.answer = null;
+      if (!S.open || S.state !== 'outgoing') return;
+      var r = rejectCfg();
+      if (r.enabled && Math.random() * 100 < r.probability) {
+        callEnded('rejected', '对方已拒绝', 1300, { byMe: false });
+        return;
+      }
+      connect();
+    }, wait);
+    T.wait = setTimeout(timeoutEnd, limit);
+  }
+  if (S.kind === 'video') showHint('点「摄像头已关」可以打开自己的画面');
+}
+function incoming(kind0) {
+  if (S.open) { toast('正在通话中，先挂断这通'); return; }
+  var a = A();
+  if (!a) return;
+  clearTimers();
+  var kind = kind0 === 'video' ? 'video' : (kind0 === 'call' || kind0 === 'voice' ? 'voice' : pickKind());
+  reset(kind, false, 'incoming');
+  S.ringLeft = extra().ringSec;
+  openUI();
+  var c = cs();
+  c.todayIncomingCalls = (c.todayIncomingCalls || 0) + 1;
+  try { if (a.renderCommunicationStats) a.renderCommunicationStats(); } catch (e) {}
+  toast(kind === 'video' ? '对方发起了视频通话' : '对方来电');
+  notify(S.peerName || '对方', (kind === 'video' ? '📹 ' : '📞 ') + '来电，请接听');
+  T.ring = setInterval(function () {
+    if (!S.open || S.state !== 'incoming') { clearInterval(T.ring); T.ring = null; return; }
+    S.ringLeft--;
+    if (S.ringLeft <= 0) {
+      if (T.ring) { clearInterval(T.ring); T.ring = null; }
+      logCall('missed', { byMe: false });
+      notify(S.peerName || '对方', '未接来电');
+      callEnded(null, '未接听', 1400, { byMe: false });
+    } else {
+      tick();
+    }
+  }, 1000);
+  if (autoAccept(kind)) {
+    T.auto = setTimeout(function () {
+      T.auto = null;
+      if (S.open && S.state === 'incoming') { toast('已自动接听'); answer(); }
+    }, 2200);
+  }
+}
+function answer() {
+  if (!S.open || S.state !== 'incoming') return;
+  if (T.ring) { clearInterval(T.ring); T.ring = null; }
+  if (T.auto) { clearTimeout(T.auto); T.auto = null; }
+  connect();
+}
+function connect() {
+  if (T.answer) { clearTimeout(T.answer); T.answer = null; }
+  if (T.wait) { clearTimeout(T.wait); T.wait = null; }
+  S.state = 'active';
+  S.startedAt = Date.now();
+  S.elapsed = 0;
+  S.statusText = '';
+  render();
+  if (S.kind === 'video') showHint('通话已接通 · 点「摄像头已关」打开自己的画面');
+  else showHint('通话已接通');
+  setTimeout(function () { if (S.open && S.state === 'active') aiRound(1); }, 700 + Math.random() * 900);
+  scheduleAi();
+}
+function callEnded(status, statusText, closeAfter, opt) {
+  clearTimers();
+  if (S.recOn) endRecord(false);
+  stopCam();
+  if (status) logCall(status, opt || {});
+  if (S.state === 'active') bumpStats(S.kind, S.elapsed);
+  S.state = 'ended';
+  S.statusText = statusText || '通话已结束';
+  S.typing = false;
+  S.more = false;
+  render();
+  T.close = setTimeout(function () { hardClose(); }, closeAfter || 1200);
+}
+function hangup() {
+  if (!S.open) return;
+  if (S.state === 'incoming') {
+    logCall('rejected', { byMe: true });
+    callEnded(null, '已拒绝', 1000, { byMe: true });
+  } else if (S.state === 'outgoing') {
+    logCall('cancelled', { byMe: true });
+    callEnded(null, '已取消', 900, { byMe: true });
+  } else if (S.state === 'active') {
+    callEnded('ended', '通话已结束', 1100, { byMe: S.byMe });
+  }
+}
+function hardClose() {
+  clearTimers();
+  stopCam();
+  if (S.recOn) endRecord(false);
+  S.open = false;
+  S.minimized = false;
+  S.state = 'idle';
+  S.stream = [];
+  render();
+  var wrap = document.getElementById('ccMiniWrap');
+  if (wrap) { wrap.className = 'cc-hide'; wrap.innerHTML = ''; }
+  miniKey = '';
+  var scr = document.getElementById('ccScreen');
+  if (scr) { scr.className = 'cc-screen cc-hide'; scr.innerHTML = ''; }
+}
+function minimize() {
+  if (!S.open || S.state === 'ended') return;
+  S.minimized = true;
+  render();
+}
+function restore() {
+  if (!S.open) return;
+  S.minimized = false;
+  render();
+}
+
+/* ---------------- 交互 ---------------- */
+function sendText() {
+  var inp = document.getElementById('ccTextInput');
+  if (!inp) return;
+  var txt = (inp.value || '').trim();
+  if (!txt) return;
+  pushLine({ from: 'me', kind: 'text', body: txt });
+  inp.value = '';
+  if (Math.random() < 0.75) {
+    setTimeout(function () {
+      if (!S.open || S.state !== 'active') return;
+      pushLine({ from: 'them', kind: 'text', body: pickLines(1)[0] });
+    }, 900 + Math.random() * 1800);
+  }
+}
+function switchKind() {
+  if (S.state !== 'active') return;
+  S.kind = S.kind === 'video' ? 'voice' : 'video';
+  S.selfBig = false;
+  S.more = false;
+  if (S.kind !== 'video') stopCam();
+  pushLine({ from: 'sys', body: S.kind === 'video' ? '已切换成视频通话' : '已切换成语音通话' });
+  render();
+  showHint(S.kind === 'video' ? '已切成视频通话，想露脸再点「摄像头」' : '已切成语音通话，画面已关掉');
+}
+function onAction(act) {
+  switch (act) {
+    case 'answer': answer(); break;
+    case 'reject': hangup(); break;
+    case 'hangup': hangup(); break;
+    case 'min': minimize(); break;
+    case 'restore': restore(); break;
+    case 'record': case 'rec': toggleRecord(); break;
+    case 'cam':
+      if (S.camOn) { stopCam(); render(); }
+      else { startCam(); }
+      break;
+    case 'flip':
+      S.facing = S.facing === 'user' ? 'environment' : 'user';
+      if (S.camOn) startCam(); else render();
+      break;
+    case 'blur': S.bgBlur = !S.bgBlur; render(); break;
+    case 'setbg': S.more = false; render(); pickBg(); break;
+    case 'clearbg': S.more = false; clearBg(); break;
+    case 'selfbig':
+      if (S.kind !== 'video' || S.state !== 'active') break;
+      S.selfBig = !S.selfBig;
+      render();
+      break;
+    case 'more': S.more = !S.more; render(); break;
+    case 'moreClose': S.more = false; render(); break;
+    case 'typing':
+      S.typing = !S.typing; S.more = false; render(); break;
+    case 'switch': switchKind(); break;
+    case 'send': sendText(); break;
+  }
+}
+function bindOnce() {
+  if (document.__ccBound) return;
+  document.__ccBound = true;
+
+  /* 拖动（视频小窗 / 收起后的小窗）—— 用指针事件，鼠标和触屏都行 */
+  document.addEventListener('pointerdown', function (ev) {
+    if (!S.open) return;
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    if (t.closest('#ccPip')) { startDrag(ev, 'pip'); return; }
+    if (t.closest('#ccMini') && !t.closest('[data-act="hangup"],[data-act="answer"],[data-act="reject"]')) {
+      startDrag(ev, 'mini');
+    }
+  }, true);
+  document.addEventListener('pointermove', moveDrag, true);
+  document.addEventListener('pointerup', endDrag, true);
+  document.addEventListener('pointercancel', endDrag, true);
+
+  document.addEventListener('change', function (ev) {
+    if (ev.target && ev.target.id === 'ccBgInput') handleBgPick(ev);
+  }, true);
+
+  document.addEventListener('click', function (ev) {
+    if (ignoreClick) { ignoreClick = false; return; }
+    var playEl = ev.target.closest && ev.target.closest('#ccScreen [data-play]');
+    if (playEl) {
+      var url = playEl.getAttribute('data-play');
+      if (url) { try { new Audio(url).play(); } catch (e) {} }
+      return;
+    }
+    var t = ev.target.closest && ev.target.closest('#ccScreen [data-act], #ccMini [data-act]');
+    if (!t) return;
+    var act = t.getAttribute('data-act');
+    if (!act) return;
+    if (act === 'moreClose') {
+      if (ev.target !== t && !ev.target.classList.contains('cc-sheetcancel')) return;
+    }
+    if (act === 'restore') { restore(); return; }
+    ev.preventDefault();
+    ev.stopPropagation();
+    onAction(act);
+  }, true);
+  document.addEventListener('keydown', function (ev) {
+    if (!S.open || !S.typing) return;
+    if (ev.key === 'Enter' && document.activeElement && document.activeElement.id === 'ccTextInput') {
+      ev.preventDefault(); sendText();
+    }
+  });
+}
+
+/* ---------------- 设置项绑定（响铃 / 等待多久算未接） ---------------- */
+var settingsBound = false;
+function saveExtra(patch) {
+  var a = A(); if (!a || !a.appData) return;
+  a.appData.communicationSettings = a.appData.communicationSettings || {};
+  var c = a.appData.communicationSettings;
+  c.callExtra = Object.assign({ ringSec: 30, waitSec: 30 }, c.callExtra || {}, patch || {});
+  try { if (a.dataManager && a.dataManager.saveCommunicationSettings) a.dataManager.saveCommunicationSettings(c); } catch (e) {}
+  try { if (a.markDirty) a.markDirty(); } catch (e) {}
+}
+function initSettingsInputs() {
+  if (settingsBound) return true;
+  var ring = document.getElementById('ccRingSecSlider');
+  var wait = document.getElementById('ccWaitSecSlider');
+  if (!ring || !wait) return false;
+  settingsBound = true;
+  var e = extra();
+  var ringV = document.getElementById('ccRingSecValue');
+  var waitV = document.getElementById('ccWaitSecValue');
+  ring.value = e.ringSec; if (ringV) ringV.textContent = e.ringSec + ' 秒';
+  wait.value = e.waitSec; if (waitV) waitV.textContent = e.waitSec + ' 秒';
+  ring.addEventListener('input', function () {
+    var v = clampNum(ring.value, 5, 180, 30);
+    if (ringV) ringV.textContent = v + ' 秒';
+    saveExtra({ ringSec: v });
+  });
+  wait.addEventListener('input', function () {
+    var v = clampNum(wait.value, 5, 180, 30);
+    if (waitV) waitV.textContent = v + ' 秒';
+    saveExtra({ waitSec: v });
+  });
+  return true;
+}
+
+/* ---------------- 挂钩：把旧的通话入口全部指向新模块 ---------------- */
+function hook() {
+  var a = A();
+  if (!a) return false;
+  if (a.__ccHooked) return true;
+  a.__ccHooked = true;
+  a.startCall = function () { start('voice'); };
+  a.startVideo = function () { start('video'); };
+  a.simulateIncomingCall = function (type) { incoming(type === 'video' ? 'video' : 'voice'); };
+  a.createCallWindow = function () { start('voice'); };
+  a.createVideoWindow = function () { start('video'); };
+  a.startVideoCall = function () { start('video'); };
+  // 设置面板里「上传通话背景」保存后，正在通话的界面立刻跟着换
+  try {
+    var dm = a.dataManager;
+    if (dm && typeof dm.saveCallBackground === 'function' && !dm.__ccBgWrapped) {
+      dm.__ccBgWrapped = true;
+      var origSave = dm.saveCallBackground.bind(dm);
+      dm.saveCallBackground = function (u) {
+        var r = origSave(u);
+        // 设置里点「恢复默认」= 两个界面都回到默认，语音/视频各自单独设的那张一起清掉
+        if (!u) {
+          try {
+            localStorage.removeItem('cc_call_bg_voice_v1');
+            localStorage.removeItem('cc_call_bg_video_v1');
+          } catch (e) {}
+        }
+        try { if (S.open) render(); } catch (e) {}
+        return r;
+      };
+    }
+  } catch (e) {}
+  return true;
+}
+function boot() {
+  ensureDom();
+  bindOnce();
+  initSettingsInputs();
+  var tries = 0;
+  var timer = setInterval(function () {
+    tries++;
+    var ok = hook();
+    initSettingsInputs();
+    if (ok || tries > 100) { clearInterval(timer); }
+  }, 200);
+  hook();
+}
+
+window.CallCenter = {
+  start: start,
+  startVoice: function () { start('voice'); },
+  startVideo: function () { start('video'); },
+  incoming: incoming,
+  hangup: hangup,
+  close: hardClose,
+  isOpen: function () { return S.open; },
+  state: S
+};
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+})();
+
+</script>
 </body></html>
